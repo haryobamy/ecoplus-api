@@ -1,0 +1,287 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  CUSTOMER
+}
+
+
+enum OrderStatus {
+  PENDING
+  CONFIRM
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+
+model User {
+  id           String   @id @default(uuid())
+  fullName     String
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  role         UserRole @default(CUSTOMER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+   isVerified   Boolean  @default(false)      
+  otpCode      String?                          
+  otpExpiry    DateTime?                     
+  googleId     String? @unique                 
+
+  // Relations
+  orders       Order[]
+  blogs        Blog[]
+
+  @@index([email])
+}
+
+
+// 3) Categories: hierarchical tree with level 1,2,3
+model Category {
+  id         String    @id @default(uuid())
+  name       String
+  slug       String    @unique
+  level      Int
+  isActive   Boolean   @default(true)
+  parentId   String?   // null for level 1
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  parent     Category? @relation("CategoryToCategory", fields: [parentId], references: [id], onDelete: Cascade)
+  children   Category[] @relation("CategoryToCategory")
+
+  // Reverse relations from Product
+  productsCategory      Product[] @relation("ProductCategory")
+  productsSubCategory   Product[] @relation("ProductSubCategory")
+  productsThirdCategory Product[] @relation("ProductThirdCategory")
+
+  @@index([parentId])
+  @@index([level])
+}
+
+
+// 4) Brands
+model Brand {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  slug      String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products  Product[]
+}
+
+// 5) Products
+model Product {
+  id               String    @id @default(uuid())
+  title            String
+  slug             String    @unique
+  description      String?
+  currencyCode     String    @default("INR")
+  price            Decimal   @db.Decimal(12, 2)
+  compareAtPrice   Decimal?  @db.Decimal(12, 2)
+  stock            Int       @default(0)
+  salesCount       Int       @default(0)
+  isActive         Boolean   @default(true)
+  rating           Decimal?  @db.Decimal(3, 2)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  // Relations
+  brandId          String?
+  brand            Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  categoryId       String?
+  category         Category? @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+
+  subCategoryId    String?
+  subCategory      Category? @relation("ProductSubCategory", fields: [subCategoryId], references: [id], onDelete: SetNull)
+
+  thirdCategoryId  String?
+  thirdCategory    Category? @relation("ProductThirdCategory", fields: [thirdCategoryId], references: [id], onDelete: SetNull)
+
+  images           ProductImage[]
+  variants         ProductVariant[]
+  orderItems       OrderItem[]
+
+  @@index([brandId])
+  @@index([categoryId, subCategoryId, thirdCategoryId])
+  @@index([isActive])
+  @@index([price])
+}
+
+// 6) Product Images
+model ProductImage {
+  id         String   @id @default(uuid())
+  productId  String
+  url        String
+  alt        String?
+  isPrimary  Boolean  @default(false)
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+// 7) Product Variants with flexible attributes (RAM, SIZE, WEIGHT, etc.)
+model ProductVariant {
+  id             String   @id @default(uuid())
+  productId      String
+  sku            String?  @unique
+  price          Decimal? @db.Decimal(12, 2) // if null, inherit product.price
+  compareAtPrice Decimal? @db.Decimal(12, 2)
+  stock          Int      @default(0)
+  attributes     Json     @default("{}")     // e.g. {"RAM":"8GB","SIZE":"L","WEIGHT":"500g"}
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems     OrderItem[]
+
+  @@index([productId])
+}
+
+// 8) Orders
+model Order {
+  id             String      @id @default(uuid())
+  orderNumber    String      @unique
+  userId         String?
+  status         OrderStatus
+  paymentMethod  String
+  paymentId      String?
+  totalAmount    Decimal     @db.Decimal(12, 2)
+  currencyCode   String      @default("INR")
+  recipientName  String
+  phone          String?
+  addressLine    String
+  pincode        String?
+  email          String?
+  placedAt       DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  user           User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items          OrderItem[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([placedAt])
+}
+
+
+// 9) Order Items
+model OrderItem {
+  id            String   @id @default(uuid())
+  orderId       String
+  productId     String?
+  variantId     String?
+  titleSnapshot String
+  price         Decimal  @db.Decimal(12, 2)
+  quantity      Int
+  currencyCode  String   @default("INR")
+
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+
+
+// 10) Banner placements (home_banner, home_banner_2, home_slides)
+model BannerPlacement {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  banners   Banner[]
+}
+
+// 11) Banners
+model Banner {
+  id            String          @id @default(uuid())
+  placementId   String
+  title         String?
+  imageUrl      String
+  linkUrl       String?
+  position      Int             @default(0)
+  isActive      Boolean         @default(true)
+  startAt       DateTime?
+  endAt         DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  placement     BannerPlacement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+
+  @@index([placementId, position])
+  @@index([isActive])
+}
+
+// 12) Blogs
+model Blog {
+  id           String   @id @default(uuid())
+  title        String
+  slug         String   @unique
+  coverImageUrl String?
+  excerpt      String?
+  content      String
+  authorId     String?
+  isPublished  Boolean  @default(false)
+  publishedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  author       User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([isPublished, publishedAt])
+}
+
+// 13) Store assets (e.g., logo)
+model StoreAsset {
+  id        String   @id @default(uuid())
+  key       String   @unique // e.g., "logo"
+  url       String
+  alt       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 14) Monthly metrics for chart
+model MonthlyMetrics {
+  id           String   @id @default(uuid())
+  year         Int
+  month        Int
+  totalUsers   Int      @default(0)
+  totalSales   Decimal  @db.Decimal(14, 2)
+  currencyCode String   @default("INR")
+
+  @@unique([year, month])
+}
