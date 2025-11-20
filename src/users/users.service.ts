@@ -38,10 +38,15 @@ export class UsersService {
     }
   }
 
-  async findAll(role?: Prisma.EnumUserRoleFilter<'User'>) {
+  async findAll(role?: string) {
     try {
+      const where: Prisma.UserWhereInput = {};
+      if (role) {
+        where.role = role as any;
+      }
+
       const users = await this.databaseService.user.findMany({
-        where: role ? { role } : {},
+        where,
       });
 
       return {

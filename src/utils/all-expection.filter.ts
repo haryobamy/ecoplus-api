@@ -10,19 +10,21 @@ import {
   PrismaClientUnknownRequestError,
   PrismaClientValidationError,
 } from '@prisma/client/runtime/library';
+import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import { MyLoggerService } from 'src/my-logger/my-logger.service';
-import ErrorHandler from './error-handler';
 
-type MyResponseObj = {
+type ErrorResponse = {
+  success: false;
   statusCode: number;
+  error: string;
+  message: string | string[];
   timestamp: string;
   path: string;
-  response: string | object;
+  method: string;
+  requestId: string;
+  details?: unknown;
 };
-
-// err.statusCode = err.statusCode || 500;
-// err.message = err.message || 'Internal server error';
 
 @Catch()
 export class AllExceptionsFilter extends BaseExceptionFilter {
@@ -32,71 +34,131 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
+    const requestId =
+      (request.headers['x-request-id'] as string) || randomUUID();
+    const timestamp = new Date().toISOString();
 
-    const myResponseObj: MyResponseObj = {
-      statusCode: 500,
-      timestamp: new Date().toISOString(),
-      path: request.url,
-      response: '',
-    };
+    const errorPayload = this.buildErrorPayload(
+      exception,
+      request,
+      requestId,
+      timestamp,
+    );
 
-    // Add more Prisma Error Types if you want
+    response.status(errorPayload.statusCode).json(errorPayload);
+
+    const stack =
+      exception instanceof Error ? exception.stack : JSON.stringify(exception);
+    this.logger.error(
+      `[${requestId}] ${request.method} ${request.url} -> ${errorPayload.statusCode} :: ${errorPayload.message}`,
+      stack,
+    );
+  }
+
+  private buildErrorPayload(
+    exception: unknown,
+    request: Request,
+    requestId: string,
+    timestamp: string,
+  ): ErrorResponse {
+    let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+    let error = 'Internal Server Error';
+    let message: string | string[] = 'An unexpected error occurred';
+    let details: unknown = undefined;
+
     if (exception instanceof HttpException) {
-      myResponseObj.statusCode = exception.getStatus();
-      myResponseObj.response = exception.getResponse();
+      statusCode = exception.getStatus();
+      const response = exception.getResponse();
+      if (typeof response === 'string') {
+        message = response;
+      } else if (typeof response === 'object') {
+        const resObj = response as Record<string, any>;
+        message = resObj.message ?? message;
+        error = resObj.error ?? exception.name;
+        details = resObj.details;
+      }
     } else if (exception instanceof PrismaClientValidationError) {
-      myResponseObj.statusCode = 422;
-      myResponseObj.response = exception.message.replaceAll(/\n/g, ' ');
+      statusCode = HttpStatus.UNPROCESSABLE_ENTITY;
+      error = 'ValidationError';
+      message = exception.message.replace(/\n/g, ' ');
     } else if (exception instanceof PrismaClientKnownRequestError) {
-      // Handle duplicate key error
-      if (exception.code === 'P2002' && exception) {
-        const message = `Duplicate field error: ${Object.keys(exception?.meta?.target as any).join(', ')}`;
-        myResponseObj.response = new ErrorHandler(message, 400);
-      }
-
-      // Handle foreign key constraint violation
-      if (exception.code === 'P2003' && exception) {
-        const message = `Foreign key constraint failed: ${exception.meta?.target}`;
-        myResponseObj.response = new ErrorHandler(message, 400);
-      }
-
-      // Handle invalid data or failed query (e.g., not found errors)
-      if (exception.code === 'P2025' && exception) {
-        const message = `Resource not found. Invalid: ${exception?.meta?.target}`;
-        myResponseObj.response = new ErrorHandler(message, 400);
-      }
-
-      // Handle other Prisma known request errors
-      if (exception.code === 'P2010') {
-        const message = `Invalid data provided for query: ${exception.meta?.query}`;
-        myResponseObj.response = new ErrorHandler(message, 400);
-      }
-
-      // Handle other Prisma-specific errors
-      if (exception.code === 'P2023') {
-        const message = `Invalid operation: ${exception.meta?.operation}`;
-        myResponseObj.response = new ErrorHandler(message, 400);
-      }
-
-      // myResponseObj.statusCode = 400;
-      // const fieldName = exception.meta?.target || 'unique constraint';
-      // const message = `A record with this ${fieldName} already exists.`;
-      // myResponseObj.response = fieldName
-      //   ? message
-      //   : exception.message.replaceAll(/\n/g, ' ');
+      const prismaError = this.transformPrismaKnownError(exception);
+      statusCode = prismaError.statusCode;
+      error = prismaError.error;
+      message = prismaError.message;
+      details = prismaError.details;
     } else if (exception instanceof PrismaClientUnknownRequestError) {
-      // Handle Prisma Unknown Request errors
-      const message = 'An unknown Prisma error occurred';
-      myResponseObj.response = new ErrorHandler(message, 500);
-    } else {
-      myResponseObj.statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
-      myResponseObj.response = 'Internal Server Error';
+      statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+      error = 'PrismaUnknownError';
+      message = 'An unknown database error occurred';
+    } else if (exception instanceof Error) {
+      message = exception.message || message;
+      error = exception.name || error;
+      details = this.isDevelopment()
+        ? { stack: exception.stack }
+        : undefined;
     }
 
-    response.status(myResponseObj.statusCode).json(myResponseObj);
+    return {
+      success: false,
+      statusCode,
+      error,
+      message,
+      timestamp,
+      path: request.url,
+      method: request.method,
+      requestId,
+      ...(details ? { details } : {}),
+    };
+  }
 
-    this.logger.error(myResponseObj.response, AllExceptionsFilter.name);
+  private transformPrismaKnownError(exception: PrismaClientKnownRequestError) {
+    const base = {
+      statusCode: HttpStatus.BAD_REQUEST,
+      error: 'DatabaseError',
+      message: 'A database error occurred',
+      details: {
+        code: exception.code,
+        meta: exception.meta,
+      },
+    };
 
-    super.catch(exception, host);
+    switch (exception.code) {
+      case 'P2002':
+        return {
+          ...base,
+          message: `Duplicate value for ${exception.meta?.target}`,
+        };
+      case 'P2003':
+        return {
+          ...base,
+          message: `Foreign key constraint failed on ${exception.meta?.target}`,
+        };
+      case 'P2025':
+        return {
+          ...base,
+          statusCode: HttpStatus.NOT_FOUND,
+          error: 'NotFound',
+          message:
+            (exception.meta?.cause as string) ||
+            'The requested resource could not be found',
+        };
+      case 'P2010':
+        return {
+          ...base,
+          message: `Invalid data provided for query`,
+        };
+      case 'P2023':
+        return {
+          ...base,
+          message: `Invalid operation: ${exception.meta?.operation}`,
+        };
+      default:
+        return base;
+    }
+  }
+
+  private isDevelopment() {
+    return process.env.NODE_ENV !== 'production';
   }
 }
