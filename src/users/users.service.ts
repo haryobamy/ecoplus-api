@@ -13,10 +13,15 @@ export class UsersService {
   ) {}
   async create(createUserDto: Prisma.UserCreateInput) {
     try {
+      console.log(createUserDto);
+      const reqBod = createUserDto;
+
+      const password = await hash(createUserDto.password, 10);
       const newUser: Prisma.UserCreateInput = {
         ...createUserDto,
-        passwordHash: await hash(createUserDto.passwordHash, 10),
+        password: password,
       };
+
       const data = await this.databaseService.user.create({
         data: { ...newUser },
       });

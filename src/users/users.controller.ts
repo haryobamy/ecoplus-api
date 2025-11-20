@@ -23,7 +23,7 @@ export class UsersController {
 
   @Get()
   findAll(@Query('role') role?: string) {
-    return this.usersService.findAll();
+    return this.usersService.findAll({});
   }
 
   @Get(':id')

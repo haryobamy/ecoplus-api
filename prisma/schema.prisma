@@ -38,7 +38,7 @@ model User {
   fullName     String
   email        String   @unique
   phone        String?
-  passwordHash String
+  password    String @map("passwordHash")
   role         UserRole @default(CUSTOMER)
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
