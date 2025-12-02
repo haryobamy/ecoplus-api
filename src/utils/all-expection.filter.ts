@@ -47,12 +47,14 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
 
     response.status(errorPayload.statusCode).json(errorPayload);
 
-    const stack =
-      exception instanceof Error ? exception.stack : JSON.stringify(exception);
-    this.logger.error(
-      `[${requestId}] ${request.method} ${request.url} -> ${errorPayload.statusCode} :: ${errorPayload.message}`,
-      stack,
-    );
+    if (!this.shouldSuppressLog(request, errorPayload.statusCode)) {
+      const stack =
+        exception instanceof Error ? exception.stack : JSON.stringify(exception);
+      this.logger.error(
+        `[${requestId}] ${request.method} ${request.url} -> ${errorPayload.statusCode} :: ${errorPayload.message}`,
+        stack,
+      );
+    }
   }
 
   private buildErrorPayload(
@@ -73,7 +75,7 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
         message = response;
       } else if (typeof response === 'object') {
         const resObj = response as Record<string, any>;
-        message = resObj.message ?? message;
+        message = this.extractMessage(resObj.message ?? message);
         error = resObj.error ?? exception.name;
         details = resObj.details;
       }
@@ -132,7 +134,7 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
       case 'P2003':
         return {
           ...base,
-          message: `Foreign key constraint failed on ${exception.meta?.target}`,
+          message: this.formatForeignKeyMessage(exception),
         };
       case 'P2025':
         return {
@@ -160,5 +162,44 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
 
   private isDevelopment() {
     return process.env.NODE_ENV !== 'production';
+  }
+
+  private shouldSuppressLog(request: Request, statusCode: number) {
+    const suppressedPaths = ['/service-worker.js'];
+    return statusCode === HttpStatus.NOT_FOUND &&
+      suppressedPaths.includes(request.path)
+      ? true
+      : false;
+  }
+
+  private extractMessage(message: unknown): string {
+    if (Array.isArray(message)) {
+      return message
+        .filter((value) => typeof value === 'string')
+        .join('; ');
+    }
+    if (typeof message === 'string') {
+      return message;
+    }
+    if (message && typeof message === 'object') {
+      if ('message' in message) {
+        return this.extractMessage((message as any).message);
+      }
+    }
+    return 'We could not process your request at this time.';
+  }
+
+  private formatForeignKeyMessage(
+    exception: PrismaClientKnownRequestError,
+  ): string {
+    const target = (exception.meta?.target as string) ?? '';
+    if (!target) return 'One of the referenced records does not exist.';
+
+    const cleaned = target
+      .replace(/[_-]fkey$/i, '')
+      .replace(/_/g, ' ')
+      .replace(/product/gi, 'product');
+
+    return `The related record for "${cleaned.trim()}" does not exist. Please create it first or use a valid identifier.`;
   }
 }
