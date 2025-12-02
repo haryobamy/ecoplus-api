@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as ejs from 'ejs';
+import * as fs from 'fs';
 import * as nodemailer from 'nodemailer';
 import Mail from 'nodemailer/lib/mailer';
 import path from 'path';
@@ -33,11 +34,7 @@ export class MailerService {
     templateName: string,
     data?: Record<string, any>,
   ): Promise<string> {
-    const templatePath = path.join(
-      __dirname,
-      '../templates',
-      `${templateName}.ejs`,
-    );
+    const templatePath = this.resolveTemplatePath(templateName);
     try {
       return await ejs.renderFile(templatePath, data || {});
     } catch (error) {
@@ -78,5 +75,18 @@ export class MailerService {
       this.logger.error('❌ Email sending failed:', error);
       throw new InternalServerErrorException('Failed to send email');
     }
+  }
+
+  private resolveTemplatePath(templateName: string) {
+    const filename = `${templateName}.ejs`;
+    const candidates = [
+      path.join(__dirname, './templates', filename),
+      path.join(process.cwd(), 'src', 'mailer', 'templates', filename),
+    ];
+
+    const existing = candidates.find((candidate) => fs.existsSync(candidate));
+    if (existing) return existing;
+
+    return candidates[0];
   }
 }

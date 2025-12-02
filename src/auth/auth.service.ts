@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcrypt-ts';
 import { DatabaseService } from 'src/database/database.service';
@@ -18,10 +23,10 @@ export class AuthService {
     try {
       const otp = generateOtp();
       const expiry = otpExpiry();
-
+      console.log(otp, 'otp generated');
       const user = await this.userService.create({
         ...createAuthDto,
-        passwordHash: createAuthDto.password,
+        password: createAuthDto.password,
       });
 
       await this.userService.update(user.data.id, {
@@ -33,16 +38,17 @@ export class AuthService {
         recipients: [user?.data?.email],
         subject: 'Your OTP Code',
         template: 'otp-mail',
-        data: { name: user?.data?.fullName, otp: user?.data?.otpCode },
+        data: { name: user?.data?.fullName, otp },
       });
 
-      //TODO: send otp email
       return {
         message: 'User registered successfully, OTP sent',
         status: true,
-        data: {
+        data: this.sanitizeUser({
           ...user.data,
-        },
+          otpCode: otp,
+          otpExpiry: expiry,
+        }),
       };
     } catch (error) {
       throw handlePrismaError(error);
@@ -72,11 +78,13 @@ export class AuthService {
         where: { email },
       });
 
-      if (!matchedUser) throw new Error('User not found');
-      if (!matchedUser.isVerified) throw new Error('User not verified');
+      console.log(matchedUser);
+      if (!matchedUser) throw new UnauthorizedException('Invalid credentials');
+      if (!matchedUser.isVerified)
+        throw new BadRequestException('User not verified');
 
-      const valid = await compare(password, matchedUser.passwordHash);
-      if (!valid) throw new Error('Invalid password');
+      const valid = await compare(password, matchedUser.password);
+      if (!valid) throw new UnauthorizedException('Invalid credentials');
 
       const token = this.jwtService.sign({
         sub: matchedUser.id,
@@ -90,6 +98,7 @@ export class AuthService {
         },
       };
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       throw handlePrismaError(error);
     }
   }
@@ -112,6 +121,7 @@ export class AuthService {
       // TODO: send OTP email
       return { message: 'Reset password OTP sent', status: true };
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       throw handlePrismaError(error);
     }
   }
@@ -126,10 +136,10 @@ export class AuthService {
 
       if (user.otpCode !== otp || user.otpExpiry < new Date())
         throw new Error('Invalid OTP');
-      const passwordHash = await hash(newPassword, 10);
+      const password = await hash(newPassword, 10);
 
       await this.userService.update(user.id, {
-        passwordHash,
+        password,
         otpCode: null,
         otpExpiry: null,
       });
@@ -144,7 +154,15 @@ export class AuthService {
       const payload = { sub: user.id, email: user.email, role: user.role };
       return this.jwtService.sign(payload);
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       throw handlePrismaError(error);
     }
+  }
+
+  private sanitizeUser(user: any) {
+    if (!user) return user;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { password, otpCode, otpExpiry, ...safeUser } = user;
+    return safeUser;
   }
 }

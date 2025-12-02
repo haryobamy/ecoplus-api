@@ -13,10 +13,15 @@ export class UsersService {
   ) {}
   async create(createUserDto: Prisma.UserCreateInput) {
     try {
+      console.log(createUserDto);
+      const reqBod = createUserDto;
+
+      const password = await hash(createUserDto.password, 10);
       const newUser: Prisma.UserCreateInput = {
         ...createUserDto,
-        passwordHash: await hash(createUserDto.passwordHash, 10),
+        password: password,
       };
+
       const data = await this.databaseService.user.create({
         data: { ...newUser },
       });
@@ -33,10 +38,15 @@ export class UsersService {
     }
   }
 
-  async findAll(role?: Prisma.EnumUserRoleFilter<'User'>) {
+  async findAll(role?: string) {
     try {
+      const where: Prisma.UserWhereInput = {};
+      if (role) {
+        where.role = role as any;
+      }
+
       const users = await this.databaseService.user.findMany({
-        where: role ? { role } : {},
+        where,
       });
 
       return {

@@ -7,7 +7,7 @@ async function main() {
     data: {
       email: 'admin@ecoplus.com',
       fullName: 'Admin User',
-      passwordHash: 'securepasswordhash',
+      password: 'securepasswordhash',
       role: 'ADMIN',
     },
   });
